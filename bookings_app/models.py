@@ -115,6 +115,8 @@ class RentPayment(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     payment_method = models.CharField(max_length=100, blank=True, default='')
     notes = models.TextField(blank=True, default='')
+    stripe_checkout_session_id = models.CharField(max_length=255, blank=True, null=True)
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -174,4 +176,54 @@ class TenancyAgreement(models.Model):
 
     def __str__(self):
         return f"Agreement for {self.property_name} - Status: {self.status}"
+
+
+class ReferencingApplication(models.Model):
+    STATUS_CHOICES = (
+        ('invited', 'Invited'),
+        ('submitted', 'Submitted'),
+        ('processing', 'Processing Checks'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed Verification'),
+    )
+
+    DECISION_CHOICES = (
+        ('pending', 'Pending Decision'),
+        ('approve', 'Approve'),
+        ('caution', 'Approve with Guarantor'),
+        ('decline', 'Decline'),
+    )
+
+    token = models.CharField(max_length=255, unique=True, db_index=True)
+    property_room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='referencing_applications')
+    landlord_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_referencing_invites')
+    
+    applicant_name = models.CharField(max_length=255)
+    applicant_email = models.EmailField(db_index=True)
+    applicant_phone = models.CharField(max_length=50, blank=True)
+    
+    application_data = models.JSONField(default=dict, blank=True)
+    uploaded_documents = models.JSONField(default=list, blank=True)
+    
+    credit_score = models.IntegerField(null=True, blank=True)
+    ccj_iva_found = models.BooleanField(default=False)
+    missed_payments = models.IntegerField(default=0)
+    ai_raw_check_result = models.JSONField(default=dict, blank=True)
+    
+    report_pdf_url = models.TextField(blank=True, null=True)
+    decision = models.CharField(max_length=20, choices=DECISION_CHOICES, default='pending')
+    landlord_override_notes = models.TextField(blank=True, default='')
+    
+    tenancy_end_date = models.DateField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    legal_dispute_active = models.BooleanField(default=False)
+    is_archived_or_deleted = models.BooleanField(default=False)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='invited')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Referencing for {self.applicant_name} ({self.applicant_email})"
+
 

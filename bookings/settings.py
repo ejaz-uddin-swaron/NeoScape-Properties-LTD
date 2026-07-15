@@ -276,6 +276,10 @@ FERNET_SECRET_KEY = os.environ.get("FERNET_SECRET_KEY")
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Stripe Config
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
+
 # File upload constraints (can be overridden by environment)
 MAX_FILE_SIZE = int(env("MAX_FILE_SIZE", default=5 * 1024 * 1024))  # 5MB
 ALLOWED_FILE_TYPES = set((env("ALLOWED_FILE_TYPES", default="jpg,jpeg,png,webp")).split(","))

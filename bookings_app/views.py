@@ -712,3 +712,415 @@ class SignAgreementView(APIView):
             'data': serializers.TenancyAgreementSerializer(agreement).data
         })
 
+
+import secrets
+from django.core.mail import send_mail
+from django.conf import settings
+from .models import ReferencingApplication
+
+class ReferencingApplicationListCreateView(APIView):
+    """
+    Landlord views for managing Tenant Referencing invites and submissions.
+    """
+    permission_classes = [IsAuthenticated] # Assume any authenticated user is staff/landlord for now
+
+    def get(self, request):
+        applications = ReferencingApplication.objects.filter(is_archived_or_deleted=False).order_by('-created_at')
+        serializer = serializers.ReferencingApplicationSerializer(applications, many=True)
+        return Response({'success': True, 'data': serializer.data})
+
+    def post(self, request):
+        property_room_id = request.data.get('room_id')
+        applicant_name = request.data.get('applicant_name')
+        applicant_email = request.data.get('applicant_email')
+        applicant_phone = request.data.get('applicant_phone', '')
+
+        if not all([property_room_id, applicant_name, applicant_email]):
+            return Response({'success': False, 'error': 'room_id, applicant_name, and applicant_email are required'}, status=400)
+
+        try:
+            room = Room.objects.get(pk=property_room_id)
+        except Room.DoesNotExist:
+            return Response({'success': False, 'error': 'Room not found'}, status=404)
+
+        token = secrets.token_urlsafe(32)
+        app = ReferencingApplication.objects.create(
+            token=token,
+            property_room=room,
+            landlord_user=request.user,
+            applicant_name=applicant_name,
+            applicant_email=applicant_email,
+            applicant_phone=applicant_phone,
+            status='invited'
+        )
+
+        # Send invite email
+        # Public invitation link
+        invite_link = f"http://localhost:5173/referencing/{token}"
+        subject = f"Tenant Referencing Invitation for {room.name}"
+        body = (
+            f"Dear {applicant_name},\n\n"
+            f"You have been invited by {request.user.username} to undergo tenant referencing for the property: {room.name} ({room.location}).\n\n"
+            f"Please complete your referencing application at the following link:\n"
+            f"{invite_link}\n\n"
+            f"Thank you,\nNeoScape Properties Management"
+        )
+        try:
+            send_mail(
+                subject,
+                body,
+                settings.DEFAULT_FROM_EMAIL or 'noreply@neoscapeproperties.com',
+                [applicant_email],
+                fail_silently=True
+            )
+        except Exception as e:
+            # log or handle email error silently
+            pass
+
+        return Response({
+            'success': True,
+            'data': serializers.ReferencingApplicationSerializer(app).data
+        })
+
+
+class ReferencingApplicationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            app = ReferencingApplication.objects.get(pk=pk, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Application not found'}, status=404)
+        return Response({'success': True, 'data': serializers.ReferencingApplicationSerializer(app).data})
+
+    def patch(self, request, pk):
+        try:
+            app = ReferencingApplication.objects.get(pk=pk, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Application not found'}, status=404)
+
+        decision = request.data.get('decision')
+        landlord_notes = request.data.get('landlord_override_notes')
+        status_val = request.data.get('status')
+
+        if decision:
+            if decision not in dict(ReferencingApplication.DECISION_CHOICES):
+                return Response({'success': False, 'error': 'Invalid decision value'}, status=400)
+            app.decision = decision
+            if decision == 'approve':
+                app.status = 'completed'
+                # Transition / Auto-transition to standard Tenant:
+                # 1. Create/Get standard user with applicant_email
+                from django.contrib.auth.models import User
+                from .models import TenantAssignment
+                
+                user, created = User.objects.get_or_create(
+                    email=app.applicant_email,
+                    defaults={
+                        'username': app.applicant_email.split('@')[0] + secrets.token_hex(3),
+                        'first_name': app.applicant_name.split(' ')[0],
+                        'last_name': ' '.join(app.applicant_name.split(' ')[1:]) if ' ' in app.applicant_name else ''
+                    }
+                )
+                if created:
+                    user.set_unusable_password()
+                    user.save()
+                
+                # Check if TenantAssignment already exists
+                assignment_exists = TenantAssignment.objects.filter(
+                    tenant=user,
+                    room=app.property_room,
+                    status='active'
+                ).exists()
+                
+                if not assignment_exists:
+                    TenantAssignment.objects.create(
+                        tenant=user,
+                        room=app.property_room,
+                        property_name=app.property_room.location,
+                        start_date=timezone.now().date(),
+                        monthly_rent=app.property_room.price,
+                        deposit=app.property_room.price * 1.5,
+                        status='pending',
+                        notes=f"Created automatically from approved referencing application #{app.id}."
+                    )
+            elif decision == 'decline':
+                app.status = 'failed'
+            app.resolved_at = timezone.now()
+
+        if landlord_notes is not None:
+            app.landlord_override_notes = landlord_notes
+
+        if status_val:
+            if status_val not in dict(ReferencingApplication.STATUS_CHOICES):
+                return Response({'success': False, 'error': 'Invalid status value'}, status=400)
+            app.status = status_val
+
+        app.save()
+        return Response({'success': True, 'data': serializers.ReferencingApplicationSerializer(app).data})
+
+
+class PublicReferencingDetailView(APIView):
+    permission_classes = [] # Public view
+
+    def get(self, request, token):
+        try:
+            app = ReferencingApplication.objects.get(token=token, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Invalid referencing token'}, status=404)
+        return Response({'success': True, 'data': serializers.ReferencingApplicationSerializer(app).data})
+
+    def post(self, request, token):
+        try:
+            app = ReferencingApplication.objects.get(token=token, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Invalid referencing token'}, status=404)
+
+        # Save tenant submission data
+        application_data = request.data.get('application_data', {})
+        uploaded_documents = request.data.get('uploaded_documents', [])
+
+        app.application_data = application_data
+        app.uploaded_documents = uploaded_documents
+        app.status = 'submitted'
+        app.save()
+
+        # Trigger AI Background checks immediately (or simulate/schedule)
+        from .services.document_extractor import process_referencing_checks
+        try:
+            process_referencing_checks(app)
+        except Exception as e:
+            # Let the status still be submitted, but log the check error
+            app.landlord_override_notes = f"Auto-checks error: {str(e)}"
+            app.save()
+
+        return Response({'success': True, 'data': serializers.ReferencingApplicationSerializer(app).data})
+
+
+class ReferencingDocumentUploadView(APIView):
+    permission_classes = [] # Allow public application upload
+
+    def post(self, request):
+        uploaded_file = request.FILES.get('file')
+        if not uploaded_file:
+            return Response({'success': False, 'error': 'No file uploaded'}, status=400)
+
+        # Bump file size limit to 10MB (10 * 1024 * 1024)
+        max_size = 10 * 1024 * 1024
+        if uploaded_file.size > max_size:
+            return Response({'success': False, 'error': 'File exceeds maximum 10MB limit'}, status=400)
+
+        # Validate file extensions
+        ext = uploaded_file.name.split('.')[-1].lower()
+        allowed_extensions = {'pdf', 'jpg', 'jpeg', 'png', 'webp'}
+        if ext not in allowed_extensions:
+            return Response({'success': False, 'error': f'Unsupported file format .{ext}'}, status=400)
+
+        from core.storage_backends import supabase_storage
+        try:
+            # Upload to private bucket
+            public_url = supabase_storage.upload_document(uploaded_file, bucket_name='documents', folder='referencing')
+            
+            # Extract private path
+            path_marker = "/object/public/documents/"
+            if path_marker in public_url:
+                file_path = public_url.split(path_marker)[-1]
+            else:
+                file_path = f"referencing/{public_url.split('/')[-1].split('?')[0]}"
+            
+            # Generate a 60-minute signed URL
+            signed_url = supabase_storage.create_signed_url(file_path, bucket_name='documents', expires_in=3600)
+            
+            return Response({
+                'success': True,
+                'file_url': signed_url,
+                'file_path': file_path,
+                'file_name': uploaded_file.name
+            })
+        except Exception as e:
+            # Fallback to local storage if Supabase is not configured
+            from django.core.files.storage import default_storage
+            file_path = default_storage.save(f'referencing_docs/{secrets.token_hex(8)}_{uploaded_file.name}', uploaded_file)
+            file_url = request.build_absolute_uri(settings.MEDIA_URL + file_path)
+            return Response({
+                'success': True,
+                'file_url': file_url,
+                'file_path': file_path,
+                'file_name': uploaded_file.name
+            })
+
+
+class GenerateReferencingReportView(APIView):
+    """Landlord-only: Generate a PDF referencing report for a given application."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            app = ReferencingApplication.objects.select_related('property_room').get(pk=pk, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Application not found'}, status=404)
+
+        if app.status == 'invited':
+            return Response({'success': False, 'error': 'Cannot generate report before applicant has submitted.'}, status=400)
+
+        from .services.report_generator import generate_referencing_report_pdf
+        try:
+            report_url = generate_referencing_report_pdf(app)
+            return Response({
+                'success': True,
+                'report_pdf_url': report_url,
+                'data': serializers.ReferencingApplicationSerializer(app).data
+            })
+        except Exception as e:
+            return Response({'success': False, 'error': f'Failed to generate report: {str(e)}'}, status=500)
+
+
+# ── Stripe Payment Views ──────────────────────────────────────────────
+
+class StripeCheckoutSessionView(APIView):
+    """
+    Create a Stripe Checkout Session for a pending RentPayment.
+    POST body: { "payment_id": 123, "success_url": "...", "cancel_url": "..." }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .models import RentPayment
+        from .services.stripe_services import create_checkout_session
+
+        payment_id = request.data.get('payment_id')
+        if not payment_id:
+            return Response({'success': False, 'error': 'payment_id is required'}, status=400)
+
+        try:
+            payment = RentPayment.objects.select_related('schedule').get(pk=payment_id)
+        except RentPayment.DoesNotExist:
+            return Response({'success': False, 'error': 'Payment not found'}, status=404)
+
+        if payment.status == 'paid':
+            return Response({'success': False, 'error': 'Payment is already paid'}, status=400)
+
+        success_url = request.data.get('success_url', request.build_absolute_uri('/'))
+        cancel_url = request.data.get('cancel_url', request.build_absolute_uri('/'))
+
+        try:
+            session = create_checkout_session(payment, success_url, cancel_url)
+            return Response({
+                'success': True,
+                'checkout_url': session.url,
+                'session_id': session.id,
+            })
+        except Exception as e:
+            return Response({'success': False, 'error': str(e)}, status=500)
+
+
+class StripeWebhookView(APIView):
+    """
+    Stripe webhook endpoint to handle payment events.
+    Verifies signature if STRIPE_WEBHOOK_SECRET is set, otherwise accepts raw payload (dev mode).
+    """
+    permission_classes = []  # No auth — Stripe calls this
+    authentication_classes = []
+
+    def post(self, request):
+        import stripe
+        from django.conf import settings
+        from .models import RentPayment
+
+        payload = request.body
+        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE', '')
+        webhook_secret = getattr(settings, 'STRIPE_WEBHOOK_SECRET', '')
+
+        event = None
+
+        if webhook_secret:
+            try:
+                event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+            except ValueError:
+                return Response({'error': 'Invalid payload'}, status=400)
+            except stripe.error.SignatureVerificationError:
+                return Response({'error': 'Invalid signature'}, status=400)
+        else:
+            # Dev mode: parse event without signature verification
+            import json
+            try:
+                event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+            except Exception:
+                return Response({'error': 'Could not parse event'}, status=400)
+
+        # Handle checkout.session.completed
+        if event and event.type == 'checkout.session.completed':
+            session = event.data.object
+            payment_id = session.get('client_reference_id') or (session.get('metadata') or {}).get('payment_id')
+
+            if payment_id:
+                try:
+                    payment = RentPayment.objects.get(pk=int(payment_id))
+                    payment.status = 'paid'
+                    payment.paid_amount = payment.amount
+                    payment.paid_date = timezone.now().date()
+                    payment.payment_method = 'stripe'
+                    payment.stripe_payment_intent_id = session.get('payment_intent', '')
+                    payment.save(update_fields=[
+                        'status', 'paid_amount', 'paid_date',
+                        'payment_method', 'stripe_payment_intent_id'
+                    ])
+                except RentPayment.DoesNotExist:
+                    pass
+
+        return Response({'status': 'ok'})
+
+
+class StripePaymentSuccessView(APIView):
+    """
+    Called by the frontend after returning from Stripe Checkout.
+    Verifies the session and marks payment as paid if not already handled by webhook.
+    GET ?session_id=cs_xxx
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import stripe
+        from django.conf import settings
+        from .models import RentPayment
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        session_id = request.query_params.get('session_id')
+
+        if not session_id:
+            return Response({'success': False, 'error': 'session_id is required'}, status=400)
+
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+        except Exception as e:
+            return Response({'success': False, 'error': str(e)}, status=400)
+
+        if session.payment_status != 'paid':
+            return Response({'success': False, 'error': 'Payment not completed yet', 'payment_status': session.payment_status}, status=402)
+
+        payment_id = session.client_reference_id or (session.metadata or {}).get('payment_id')
+        if not payment_id:
+            return Response({'success': False, 'error': 'Could not identify payment'}, status=400)
+
+        try:
+            payment = RentPayment.objects.get(pk=int(payment_id))
+        except RentPayment.DoesNotExist:
+            return Response({'success': False, 'error': 'Payment record not found'}, status=404)
+
+        if payment.status != 'paid':
+            payment.status = 'paid'
+            payment.paid_amount = payment.amount
+            payment.paid_date = timezone.now().date()
+            payment.payment_method = 'stripe'
+            payment.stripe_payment_intent_id = session.get('payment_intent', '')
+            payment.save(update_fields=[
+                'status', 'paid_amount', 'paid_date',
+                'payment_method', 'stripe_payment_intent_id'
+            ])
+
+        return Response({
+            'success': True,
+            'message': 'Payment confirmed',
+            'payment_id': payment.id,
+            'status': payment.status,
+        })

@@ -209,7 +209,7 @@ Content-Type: application/json
 ```
 
 #### Get All Bookings (Admin Only)
-```http
+```http 
 GET /api/bookings
 Authorization: Bearer <jwt_token>
 ```

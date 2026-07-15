@@ -6,6 +6,10 @@ from .views import (
     MyRentSchedulesView, MyRentRemindersView,
     ChatChannelView, ChatMessageView, GenerateAgreementView,
     TenancyAgreementView, TenancyAgreementDetailView, SignAgreementView,
+    ReferencingApplicationListCreateView, ReferencingApplicationDetailView,
+    PublicReferencingDetailView, ReferencingDocumentUploadView,
+    GenerateReferencingReportView,
+    StripeCheckoutSessionView, StripeWebhookView, StripePaymentSuccessView,
 )
 
 urlpatterns = [
@@ -34,5 +38,17 @@ urlpatterns = [
     path('agreements/', TenancyAgreementView.as_view(), name='agreements-list'),
     path('agreements/<int:pk>/', TenancyAgreementDetailView.as_view(), name='agreement-detail'),
     path('agreements/<int:pk>/sign/', SignAgreementView.as_view(), name='sign-agreement'),
+
+    # Tenant Referencing Module
+    path('referencing/', ReferencingApplicationListCreateView.as_view(), name='referencing-list'),
+    path('referencing/<int:pk>/', ReferencingApplicationDetailView.as_view(), name='referencing-detail'),
+    path('referencing/<int:pk>/report/', GenerateReferencingReportView.as_view(), name='referencing-report'),
+    path('referencing/public/<str:token>/', PublicReferencingDetailView.as_view(), name='public-referencing-detail'),
+    path('referencing/upload/', ReferencingDocumentUploadView.as_view(), name='referencing-upload'),
+
+    # Stripe Payments
+    path('stripe/checkout/', StripeCheckoutSessionView.as_view(), name='stripe-checkout'),
+    path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
+    path('stripe/success/', StripePaymentSuccessView.as_view(), name='stripe-success'),
 ]
 

@@ -165,5 +165,19 @@ class SupabaseStorage:
         }
         return content_types.get(ext, 'application/octet-stream')
 
+    def create_signed_url(self, file_path: str, bucket_name: str = 'documents', expires_in: int = 3600) -> str:
+        if not self.client:
+            return ""
+        try:
+            # Create private bucket if not ensured
+            self._ensure_bucket(bucket_name, public=False)
+            res = self.client.storage.from_(bucket_name).create_signed_url(file_path, expires_in)
+            if isinstance(res, dict):
+                return res.get('signedURL', res.get('signed_url', ''))
+            return getattr(res, 'signed_url', str(res))
+        except Exception as e:
+            logger.error("Failed to create signed URL for path %s: %s", file_path, e)
+            return ""
+
 
 supabase_storage = SupabaseStorage()

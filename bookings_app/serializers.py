@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Booking, RentSchedule, RentPayment, TenantAssignment, ChatChannel, ChatMessage, TenancyAgreement
+from .models import Booking, RentSchedule, RentPayment, TenantAssignment, ChatChannel, ChatMessage, TenancyAgreement, ReferencingApplication
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -189,4 +189,54 @@ class TenancyAgreementSerializer(serializers.ModelSerializer):
             'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+
+
+class ReferencingApplicationSerializer(serializers.ModelSerializer):
+    property_name = serializers.CharField(source='property_room.name', read_only=True)
+    property_location = serializers.CharField(source='property_room.location', read_only=True)
+    landlord_username = serializers.CharField(source='landlord_user.username', read_only=True)
+    uploaded_documents = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReferencingApplication
+        fields = [
+            'id', 'token', 'property_room', 'property_name', 'property_location',
+            'landlord_user', 'landlord_username', 'applicant_name', 'applicant_email', 'applicant_phone',
+            'application_data', 'uploaded_documents', 'credit_score', 'ccj_iva_found', 'missed_payments',
+            'ai_raw_check_result', 'report_pdf_url', 'decision', 'landlord_override_notes',
+            'tenancy_end_date', 'resolved_at', 'legal_dispute_active', 'is_archived_or_deleted',
+            'status', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'token', 'created_at', 'updated_at']
+
+    def get_uploaded_documents(self, obj):
+        from core.storage_backends import supabase_storage
+        docs = obj.uploaded_documents
+        resolved_docs = []
+        for doc in docs:
+            file_path = ""
+            file_name = ""
+            if isinstance(doc, dict):
+                file_path = doc.get('file_path', doc.get('file_url', ''))
+                file_name = doc.get('file_name', '')
+            elif isinstance(doc, str):
+                file_path = doc
+                file_name = doc.split('/')[-1]
+
+            if file_path.startswith("referencing/"):
+                signed_url = supabase_storage.create_signed_url(file_path, bucket_name='documents', expires_in=3600)
+                resolved_docs.append({
+                    'file_url': signed_url,
+                    'file_path': file_path,
+                    'file_name': file_name
+                })
+            else:
+                resolved_docs.append({
+                    'file_url': file_path,
+                    'file_path': file_path,
+                    'file_name': file_name
+                })
+        return resolved_docs
+
+
 
