@@ -966,13 +966,90 @@ class GenerateReferencingReportView(APIView):
         from .services.report_generator import generate_referencing_report_pdf
         try:
             report_url = generate_referencing_report_pdf(app)
+            # Refresh from DB to get the stored file_path
+            app.refresh_from_db()
             return Response({
                 'success': True,
                 'report_pdf_url': report_url,
+                'report_file_path': app.report_pdf_url,
                 'data': serializers.ReferencingApplicationSerializer(app).data
             })
         except Exception as e:
             return Response({'success': False, 'error': f'Failed to generate report: {str(e)}'}, status=500)
+
+
+class DownloadReferencingReportView(APIView):
+    """
+    Landlord-only: Download the PDF referencing report for a given application.
+    Generates a fresh signed URL for Supabase-stored files, or serves local files
+    with proper Content-Disposition headers.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            app = ReferencingApplication.objects.select_related('property_room').get(pk=pk, is_archived_or_deleted=False)
+        except ReferencingApplication.DoesNotExist:
+            return Response({'success': False, 'error': 'Application not found'}, status=404)
+
+        if not app.report_pdf_url:
+            return Response({'success': False, 'error': 'No report has been generated yet.'}, status=404)
+
+        stored_path = app.report_pdf_url
+
+        # Case 1: Supabase file path (e.g. "referencing_reports/xxx.pdf")
+        if stored_path.startswith('referencing_reports/'):
+            from core.storage_backends import supabase_storage
+            signed_url = supabase_storage.create_signed_url(
+                stored_path, bucket_name='documents', expires_in=3600
+            )
+            if signed_url:
+                return Response({
+                    'success': True,
+                    'download_url': signed_url,
+                    'file_name': f'referencing_report_{app.id}.pdf',
+                    'content_type': 'application/pdf',
+                })
+            else:
+                return Response({
+                    'success': False,
+                    'error': 'Failed to generate download URL. The file may no longer exist in storage.'
+                }, status=500)
+
+        # Case 2: Local file path (e.g. "/media/referencing_reports/xxx.pdf")
+        import os
+        from django.conf import settings as django_settings
+        from django.http import FileResponse
+
+        if stored_path.startswith(django_settings.MEDIA_URL):
+            # Strip the MEDIA_URL prefix to get relative path
+            relative_path = stored_path[len(django_settings.MEDIA_URL):]
+            absolute_path = os.path.join(django_settings.MEDIA_ROOT, relative_path)
+        else:
+            absolute_path = os.path.join(django_settings.MEDIA_ROOT, stored_path)
+
+        if os.path.exists(absolute_path):
+            response = FileResponse(
+                open(absolute_path, 'rb'),
+                content_type='application/pdf',
+            )
+            response['Content-Disposition'] = f'attachment; filename="referencing_report_{app.id}.pdf"'
+            return response
+
+        # Case 3: Legacy signed URL (still valid or expired)
+        if stored_path.startswith('http'):
+            return Response({
+                'success': True,
+                'download_url': stored_path,
+                'file_name': f'referencing_report_{app.id}.pdf',
+                'content_type': 'application/pdf',
+                'warning': 'This is a legacy URL that may have expired. Consider regenerating the report.'
+            })
+
+        return Response({
+            'success': False,
+            'error': 'Report file could not be located. Please regenerate the report.'
+        }, status=404)
 
 
 # ── Stripe Payment Views ──────────────────────────────────────────────

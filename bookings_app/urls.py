@@ -8,7 +8,7 @@ from .views import (
     TenancyAgreementView, TenancyAgreementDetailView, SignAgreementView,
     ReferencingApplicationListCreateView, ReferencingApplicationDetailView,
     PublicReferencingDetailView, ReferencingDocumentUploadView,
-    GenerateReferencingReportView,
+    GenerateReferencingReportView, DownloadReferencingReportView,
     StripeCheckoutSessionView, StripeWebhookView, StripePaymentSuccessView,
 )
 
@@ -43,6 +43,7 @@ urlpatterns = [
     path('referencing/', ReferencingApplicationListCreateView.as_view(), name='referencing-list'),
     path('referencing/<int:pk>/', ReferencingApplicationDetailView.as_view(), name='referencing-detail'),
     path('referencing/<int:pk>/report/', GenerateReferencingReportView.as_view(), name='referencing-report'),
+    path('referencing/<int:pk>/report/download/', DownloadReferencingReportView.as_view(), name='referencing-report-download'),
     path('referencing/public/<str:token>/', PublicReferencingDetailView.as_view(), name='public-referencing-detail'),
     path('referencing/upload/', ReferencingDocumentUploadView.as_view(), name='referencing-upload'),
 
