@@ -272,6 +272,56 @@ class MyAssignmentView(APIView):
 # ─── Tenant Rent Views ────────────────────────────────────────────────────────
 
 
+def _auto_generate_payments(schedule):
+    """
+    Auto-generate pending RentPayment records for each month
+    from the schedule's start_date up to the current month.
+    Skips months that already have a payment record.
+    Marks past-due payments as 'overdue'.
+    """
+    from .models import RentPayment
+    from datetime import date
+    import calendar
+
+    today = timezone.now().date()
+    start = schedule.start_date
+
+    # Don't generate for non-active schedules
+    if schedule.status != 'active':
+        return
+
+    # Walk month-by-month from start_date to the current month
+    year, month = start.year, start.month
+    while date(year, month, 1) <= today.replace(day=1):
+        # Clamp due_day to the last day of the month
+        last_day = calendar.monthrange(year, month)[1]
+        due_day = min(schedule.due_day, last_day)
+        due_date = date(year, month, due_day)
+
+        # Only generate if no payment exists for this month yet
+        exists = RentPayment.objects.filter(
+            schedule=schedule,
+            due_date__year=year,
+            due_date__month=month
+        ).exists()
+
+        if not exists:
+            payment_status = 'overdue' if due_date < today else 'pending'
+            RentPayment.objects.create(
+                schedule=schedule,
+                due_date=due_date,
+                amount=schedule.monthly_rent,
+                status=payment_status,
+            )
+
+        # Advance to next month
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+
+
 class MyRentSchedulesView(APIView):
     """Tenant: view own rent schedules."""
     permission_classes = [IsAdminOrTenant]
@@ -288,6 +338,13 @@ class MyRentSchedulesView(APIView):
             schedules = RentSchedule.objects.filter(
                 tenant_email=request.user.email
             ).prefetch_related('payment_history')
+
+        # Auto-generate any missing monthly payment records
+        for schedule in schedules:
+            _auto_generate_payments(schedule)
+
+        # Re-fetch with fresh payment_history after generation
+        schedules = schedules.all()
 
         serializer = serializers.RentScheduleSerializer(schedules, many=True)
         return Response({'success': True, 'data': serializer.data})
@@ -814,15 +871,19 @@ class ReferencingApplicationDetailView(APIView):
                 from django.contrib.auth.models import User
                 from .models import TenantAssignment
                 
-                user, created = User.objects.get_or_create(
-                    email=app.applicant_email,
-                    defaults={
-                        'username': app.applicant_email.split('@')[0] + secrets.token_hex(3),
-                        'first_name': app.applicant_name.split(' ')[0],
-                        'last_name': ' '.join(app.applicant_name.split(' ')[1:]) if ' ' in app.applicant_name else ''
-                    }
-                )
-                if created:
+                user = User.objects.filter(email=app.applicant_email).first()
+                if not user:
+                    username = app.applicant_email.split('@')[0] + secrets.token_hex(3)
+                    # Ensure username is unique
+                    while User.objects.filter(username=username).exists():
+                        username = app.applicant_email.split('@')[0] + secrets.token_hex(3)
+                    
+                    user = User.objects.create(
+                        email=app.applicant_email,
+                        username=username,
+                        first_name=app.applicant_name.split(' ')[0],
+                        last_name=' '.join(app.applicant_name.split(' ')[1:]) if ' ' in app.applicant_name else ''
+                    )
                     user.set_unusable_password()
                     user.save()
                 
@@ -834,13 +895,14 @@ class ReferencingApplicationDetailView(APIView):
                 ).exists()
                 
                 if not assignment_exists:
+                    from decimal import Decimal
                     TenantAssignment.objects.create(
                         tenant=user,
                         room=app.property_room,
                         property_name=app.property_room.location,
                         start_date=timezone.now().date(),
                         monthly_rent=app.property_room.price,
-                        deposit=app.property_room.price * 1.5,
+                        deposit=app.property_room.price * Decimal('1.5'),
                         status='pending',
                         notes=f"Created automatically from approved referencing application #{app.id}."
                     )
