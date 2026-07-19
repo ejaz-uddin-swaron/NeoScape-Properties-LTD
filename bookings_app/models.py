@@ -188,7 +188,7 @@ class ReferencingApplication(models.Model):
     )
 
     DECISION_CHOICES = (
-        ('pending', 'Pending Decision'),
+        ('pending', 'Pending'),
         ('approve', 'Approve'),
         ('caution', 'Approve with Guarantor'),
         ('decline', 'Decline'),

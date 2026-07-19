@@ -178,36 +178,69 @@ class ChatChannelSerializer(serializers.ModelSerializer):
 
 class TenancyAgreementSerializer(serializers.ModelSerializer):
     tenant_username = serializers.CharField(source='tenant.username', read_only=True)
+    tenant_full_name = serializers.SerializerMethodField()
+    signature_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = TenancyAgreement
         fields = [
-            'id', 'channel', 'property_name', 'tenant', 'tenant_username', 'room_id',
+            'id', 'channel', 'property_name', 'tenant', 'tenant_username', 'tenant_full_name', 'room_id',
             'agreement_text', 'status',
             'tenant_signed', 'tenant_signature_svg', 'tenant_signed_at',
             'admin_signed', 'admin_signature_svg', 'admin_signed_at',
+            'signature_summary',
             'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_tenant_full_name(self, obj):
+        name = f"{obj.tenant.first_name} {obj.tenant.last_name}".strip()
+        return name if name else obj.tenant.email or obj.tenant.username
+
+    def get_signature_summary(self, obj):
+        return {
+            'tenant_signed': obj.tenant_signed,
+            'tenant_has_signature': bool(obj.tenant_signature_svg),
+            'tenant_signed_at': obj.tenant_signed_at.isoformat() if obj.tenant_signed_at else None,
+            'admin_signed': obj.admin_signed,
+            'admin_has_signature': bool(obj.admin_signature_svg),
+            'admin_signed_at': obj.admin_signed_at.isoformat() if obj.admin_signed_at else None,
+            'fully_signed': obj.tenant_signed and obj.admin_signed,
+        }
 
 
 class ReferencingApplicationSerializer(serializers.ModelSerializer):
     property_name = serializers.CharField(source='property_room.name', read_only=True)
     property_location = serializers.CharField(source='property_room.location', read_only=True)
     landlord_username = serializers.CharField(source='landlord_user.username', read_only=True)
+    landlord_full_name = serializers.SerializerMethodField()
     uploaded_documents = serializers.SerializerMethodField()
+    decision_display = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
 
     class Meta:
         model = ReferencingApplication
         fields = [
             'id', 'token', 'property_room', 'property_name', 'property_location',
-            'landlord_user', 'landlord_username', 'applicant_name', 'applicant_email', 'applicant_phone',
+            'landlord_user', 'landlord_username', 'landlord_full_name',
+            'applicant_name', 'applicant_email', 'applicant_phone',
             'application_data', 'uploaded_documents', 'credit_score', 'ccj_iva_found', 'missed_payments',
-            'ai_raw_check_result', 'report_pdf_url', 'decision', 'landlord_override_notes',
+            'ai_raw_check_result', 'report_pdf_url', 'decision', 'decision_display',
+            'landlord_override_notes',
             'tenancy_end_date', 'resolved_at', 'legal_dispute_active', 'is_archived_or_deleted',
-            'status', 'created_at', 'updated_at'
+            'status', 'status_display', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'token', 'created_at', 'updated_at']
+
+    def get_landlord_full_name(self, obj):
+        name = f"{obj.landlord_user.first_name} {obj.landlord_user.last_name}".strip()
+        return name if name else obj.landlord_user.email or obj.landlord_user.username
+
+    def get_decision_display(self, obj):
+        return obj.get_decision_display()
+
+    def get_status_display(self, obj):
+        return obj.get_status_display()
 
     def get_uploaded_documents(self, obj):
         from core.storage_backends import supabase_storage

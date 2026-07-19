@@ -63,8 +63,71 @@ def extract_text_from_url(file_url, file_name=None):
 
 
 import json
+import re
 from openai import OpenAI
 from django.conf import settings
+
+
+def _normalize_ocr_text(text: str) -> str:
+    """Pre-process extracted text to clean up common OCR artifacts."""
+    if not text:
+        return text
+    # Collapse multiple whitespace/newlines into single space
+    text = re.sub(r'[ \t]+', ' ', text)
+    # Fix common OCR character substitutions
+    text = text.replace('|', 'l')  # pipe → lowercase L
+    text = text.replace('0', 'O').replace('O', '0')  # Only in numeric contexts — skip global
+    # Remove non-printable characters
+    text = re.sub(r'[^\x20-\x7E\n£€$%]', '', text)
+    # Normalize currency symbols
+    text = text.replace('f', '£').replace('E', '£') if False else text  # skip aggressive
+    # Collapse excessive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """Try to parse JSON from LLM response, with regex fallback for malformed output."""
+    # First: direct parse
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Fallback: find JSON-like block in the response
+    json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Last resort: regex extraction of individual fields
+    result = {
+        "credit_score": None,
+        "ccj_iva_found": False,
+        "missed_payments": 0,
+        "explanation": "Could not parse structured response from AI."
+    }
+
+    score_match = re.search(r'"credit_score"\s*:\s*(\d+)', text)
+    if score_match:
+        result["credit_score"] = int(score_match.group(1))
+
+    ccj_match = re.search(r'"ccj_iva_found"\s*:\s*(true|false)', text, re.IGNORECASE)
+    if ccj_match:
+        result["ccj_iva_found"] = ccj_match.group(1).lower() == 'true'
+
+    missed_match = re.search(r'"missed_payments"\s*:\s*(\d+)', text)
+    if missed_match:
+        result["missed_payments"] = int(missed_match.group(1))
+
+    explanation_match = re.search(r'"explanation"\s*:\s*"([^"]*)"', text)
+    if explanation_match:
+        result["explanation"] = explanation_match.group(1)
+
+    return result
+
 
 def process_referencing_checks(app):
     """
@@ -96,6 +159,9 @@ def process_referencing_checks(app):
 
     full_extracted_text = "\n".join(extracted_text_runs)
 
+    # Pre-process OCR text to reduce noise
+    full_extracted_text = _normalize_ocr_text(full_extracted_text)
+
     # Call Groq API
     api_key = getattr(settings, 'NEOSCAPE_API_KEY', '')
     if not api_key:
@@ -108,15 +174,30 @@ def process_referencing_checks(app):
 
     system_prompt = (
         "You are an expert AI tenant referencing assistant.\n"
-        "Your task is to analyze the provided credit file text and applicant details.\n"
-        "Extract key credit markers.\n"
-        "Respond with a raw JSON object and nothing else. The JSON must contain these exact keys:\n"
+        "Your task is to analyze the provided credit report text and applicant details.\n"
+        "The text may come from OCR-scanned documents and may contain:\n"
+        "- Garbled or misspelled characters (e.g. 'Cr3dit Sc0re' instead of 'Credit Score')\n"
+        "- Broken lines, merged words, or missing spaces\n"
+        "- Inconsistent formatting, tables rendered as plain text\n"
+        "- Currency symbols like £ may appear as 'f' or 'E' or be missing\n"
+        "\n"
+        "Despite these issues, do your best to extract the following credit markers.\n"
+        "If a value cannot be determined from the text, use null for numbers and false for booleans.\n"
+        "Do NOT guess or fabricate values — only report what is clearly present in the text.\n"
+        "\n"
+        "Respond with a raw JSON object and nothing else. No markdown, no code fences, no explanation.\n"
+        "The JSON must contain exactly these keys:\n"
         "{\n"
-        '  "credit_score": <int or null>,\n'
-        '  "ccj_iva_found": <bool>,\n'
-        '  "missed_payments": <int>,\n'
-        '  "explanation": "<brief summary of findings>"\n'
-        "}"
+        '  "credit_score": <integer between 0 and 999, or null if not found>,\n'
+        '  "ccj_iva_found": <true if any CCJs, IVAs, or bankruptcies are mentioned, otherwise false>,\n'
+        '  "missed_payments": <integer count of missed or late payments, or 0 if none found>,\n'
+        '  "explanation": "<brief 1-3 sentence summary of the key findings from the documents>"\n'
+        "}\n"
+        "\n"
+        "Examples of what to look for:\n"
+        "- Credit score: Look for patterns like 'Score: 720', 'Credit Rating: 650', 'Experian Score 580'\n"
+        "- CCJs/IVAs: Look for 'County Court Judgment', 'CCJ', 'IVA', 'Individual Voluntary Arrangement', 'Bankruptcy'\n"
+        "- Missed payments: Look for 'missed payment', 'late payment', 'default', 'arrears', 'payment missed'\n"
     )
 
     user_prompt = (
@@ -136,18 +217,18 @@ def process_referencing_checks(app):
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content
-        data = json.loads(content)
+        data = _extract_json_from_text(content)
     except Exception as e:
         # Fallback to default rule-based parsing or mock values if API fails
         data = {
-            "credit_score": 620,
+            "credit_score": None,
             "ccj_iva_found": False,
-            "missed_payments": 1,
-            "explanation": f"Automated extraction failed or returned invalid format. Using safe fallback defaults. Error: {str(e)}"
+            "missed_payments": 0,
+            "explanation": f"Automated extraction failed. Error: {str(e)}"
         }
 
     # Save check results
-    app.credit_score = data.get('credit_score', 600)
+    app.credit_score = data.get('credit_score')
     app.ccj_iva_found = data.get('ccj_iva_found', False)
     app.missed_payments = data.get('missed_payments', 0)
     app.ai_raw_check_result = data
@@ -164,7 +245,8 @@ def process_referencing_checks(app):
         app.status = 'processing'
     else:
         app.decision = 'approve'
-        app.status = 'processing' # Still requires final landlord review / manual override
+        app.status = 'processing'  # Still requires final landlord review / manual override
 
     app.save()
+
 

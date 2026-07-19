@@ -278,10 +278,13 @@ def generate_referencing_report_pdf(app):
                 )
 
             signed_url = supabase_storage.create_signed_url(file_path, bucket_name='documents', expires_in=86400)
-            app.report_pdf_url = signed_url or file_path
+            # Store the raw file path (not the expiring signed URL) so we can
+            # regenerate fresh signed URLs on demand via the download endpoint.
+            app.report_pdf_url = file_path
             app.save(update_fields=['report_pdf_url'])
             logger.info("PDF report uploaded to Supabase for application #%s", app.id)
-            return app.report_pdf_url
+            # Return the signed URL for immediate use
+            return signed_url or file_path
     except Exception as e:
         logger.warning("Supabase upload failed for PDF report, falling back to local: %s", e)
 
