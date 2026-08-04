@@ -1194,7 +1194,7 @@ class StripeWebhookView(APIView):
         # Handle checkout.session.completed
         if event and event.type == 'checkout.session.completed':
             session = event.data.object
-            payment_id = session.get('client_reference_id') or (session.get('metadata') or {}).get('payment_id')
+            payment_id = getattr(session, 'client_reference_id', None) or (getattr(session, 'metadata', {}) or {}).get('payment_id')
 
             if payment_id:
                 try:
@@ -1203,7 +1203,7 @@ class StripeWebhookView(APIView):
                     payment.paid_amount = payment.amount
                     payment.paid_date = timezone.now().date()
                     payment.payment_method = 'stripe'
-                    payment.stripe_payment_intent_id = session.get('payment_intent', '')
+                    payment.stripe_payment_intent_id = str(getattr(session, 'payment_intent', '') or '')
                     payment.save(update_fields=[
                         'status', 'paid_amount', 'paid_date',
                         'payment_method', 'stripe_payment_intent_id'
@@ -1224,10 +1224,17 @@ class StripePaymentSuccessView(APIView):
 
     def get(self, request):
         import stripe
+        import logging
+        logger = logging.getLogger(__name__)
         from django.conf import settings
         from .models import RentPayment
 
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe_key = getattr(settings, 'STRIPE_SECRET_KEY', '')
+        if not stripe_key:
+            logger.error("[StripePaymentSuccessView] STRIPE_SECRET_KEY is missing from settings.")
+            return Response({'success': False, 'error': 'Stripe secret key is missing from backend configuration.'}, status=500)
+
+        stripe.api_key = stripe_key
         session_id = request.query_params.get('session_id')
 
         if not session_id:
@@ -1236,30 +1243,35 @@ class StripePaymentSuccessView(APIView):
         try:
             session = stripe.checkout.Session.retrieve(session_id)
         except Exception as e:
-            return Response({'success': False, 'error': str(e)}, status=400)
+            logger.error(f"[StripePaymentSuccessView] Stripe session.retrieve failed: {str(e)}")
+            return Response({'success': False, 'error': f'Stripe retrieve error: {str(e)}'}, status=400)
 
         if session.payment_status != 'paid':
-            return Response({'success': False, 'error': 'Payment not completed yet', 'payment_status': session.payment_status}, status=402)
+            logger.warning(f"[StripePaymentSuccessView] Session {session_id} payment status is '{session.payment_status}' instead of 'paid'")
+            return Response({'success': False, 'error': f'Payment status is {session.payment_status}', 'payment_status': session.payment_status}, status=402)
 
         payment_id = session.client_reference_id or (session.metadata or {}).get('payment_id')
         if not payment_id:
-            return Response({'success': False, 'error': 'Could not identify payment'}, status=400)
+            logger.error(f"[StripePaymentSuccessView] Session {session_id} has no client_reference_id or payment_id in metadata")
+            return Response({'success': False, 'error': 'Could not identify payment record from session'}, status=400)
 
         try:
             payment = RentPayment.objects.get(pk=int(payment_id))
         except RentPayment.DoesNotExist:
-            return Response({'success': False, 'error': 'Payment record not found'}, status=404)
+            logger.error(f"[StripePaymentSuccessView] RentPayment #{payment_id} not found")
+            return Response({'success': False, 'error': f'Payment #{payment_id} record not found'}, status=404)
 
         if payment.status != 'paid':
             payment.status = 'paid'
             payment.paid_amount = payment.amount
             payment.paid_date = timezone.now().date()
             payment.payment_method = 'stripe'
-            payment.stripe_payment_intent_id = session.get('payment_intent', '')
+            payment.stripe_payment_intent_id = getattr(session, 'payment_intent', '') or ''
             payment.save(update_fields=[
                 'status', 'paid_amount', 'paid_date',
                 'payment_method', 'stripe_payment_intent_id'
             ])
+            logger.info(f"[StripePaymentSuccessView] Marked RentPayment #{payment.id} as PAID via Stripe session {session_id}")
 
         return Response({
             'success': True,
