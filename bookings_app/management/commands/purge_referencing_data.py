@@ -1,7 +1,7 @@
 import logging
+from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from dateutil.relativedelta import relativedelta
 from bookings_app.models import ReferencingApplication
 from core.storage_backends import supabase_storage
 
@@ -15,7 +15,7 @@ class Command(BaseCommand):
         today = now.date()
 
         # 1. Tenancies ended 12+ months ago with no active legal dispute
-        cut_off_12m = today - relativedelta(months=12)
+        cut_off_12m = today - timedelta(days=365)
         apps_to_purge_tenancy = ReferencingApplication.objects.filter(
             tenancy_end_date__lte=cut_off_12m,
             legal_dispute_active=False,
@@ -23,7 +23,7 @@ class Command(BaseCommand):
         )
 
         # 2. Legal dispute resolved 6+ months ago
-        cut_off_6m = now - relativedelta(months=6)
+        cut_off_6m = now - timedelta(days=180)
         apps_to_purge_resolved = ReferencingApplication.objects.filter(
             legal_dispute_active=False,
             resolved_at__lte=cut_off_6m,
