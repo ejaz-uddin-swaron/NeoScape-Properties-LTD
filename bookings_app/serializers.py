@@ -24,15 +24,21 @@ class RentPaymentSerializer(serializers.ModelSerializer):
 
 class RentScheduleSerializer(serializers.ModelSerializer):
     payment_history = RentPaymentSerializer(many=True, read_only=True)
+    room_id = serializers.SerializerMethodField()
 
     class Meta:
         model = RentSchedule
         fields = [
-            'id', 'room_name', 'tenant_name', 'tenant_email', 'tenant_phone',
+            'id', 'room_id', 'room_name', 'tenant_name', 'tenant_email', 'tenant_phone',
             'monthly_rent', 'due_day', 'start_date', 'end_date', 'status',
             'tenant_user', 'assignment',
             'payment_history', 'created_at', 'updated_at'
         ]
+
+    def get_room_id(self, obj):
+        if obj.assignment and obj.assignment.room_id:
+            return obj.assignment.room_id
+        return None
 
 
 class RentScheduleCreateSerializer(serializers.ModelSerializer):

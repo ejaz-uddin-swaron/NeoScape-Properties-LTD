@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rooms.permissions import IsAdmin, IsTenant, IsAdminOrTenant
 from rooms.models import Room
 from .models import Booking, TenantAssignment, ChatChannel, ChatMessage, TenancyAgreement
@@ -924,6 +925,7 @@ class ReferencingApplicationDetailView(APIView):
 
 class PublicReferencingDetailView(APIView):
     permission_classes = [] # Public view
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def get(self, request, token):
         try:
@@ -961,6 +963,7 @@ class PublicReferencingDetailView(APIView):
 
 class ReferencingDocumentUploadView(APIView):
     permission_classes = [] # Allow public application upload
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def post(self, request):
         uploaded_file = request.FILES.get('file')
@@ -1015,6 +1018,7 @@ class ReferencingDocumentUploadView(APIView):
 class GenerateReferencingReportView(APIView):
     """Landlord-only: Generate a PDF referencing report for a given application."""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
 
     def post(self, request, pk):
         try:

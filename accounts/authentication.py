@@ -134,9 +134,6 @@ class SupabaseAuthentication(authentication.BaseAuthentication):
                 mobile_no='',
                 image=''
             )
-        elif user.client.role != role:
-            user.client.role = role
-            user.client.save(update_fields=['role'])
 
         return (user, token)
 
