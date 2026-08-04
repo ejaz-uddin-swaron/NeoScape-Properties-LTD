@@ -41,3 +41,6 @@ xhtml2pdf>=0.2.16
 
 # Stripe Payments
 stripe>=8.0
+
+# Date handling
+python-dateutil>=2.9
