@@ -44,6 +44,14 @@ services:
         value: documents
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: NeoScape_Api_Key
+        sync: false
+      - key: FRONTEND_URL
+        value: "https://neoscapeproperties.co.uk"
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
 
   - type: cron
     name: room-booking-reminders

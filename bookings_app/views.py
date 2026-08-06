@@ -772,6 +772,7 @@ class SignAgreementView(APIView):
 
 
 import secrets
+import threading
 from django.core.mail import send_mail
 from django.conf import settings
 from .models import ReferencingApplication
@@ -812,8 +813,7 @@ class ReferencingApplicationListCreateView(APIView):
             status='invited'
         )
 
-        # Send invite email
-        # Public invitation link
+        # Send invite email in background thread so API responds immediately
         frontend_base = getattr(settings, 'FRONTEND_URL', 'https://neoscapeproperties.co.uk').rstrip('/')
         invite_link = f"{frontend_base}/referencing/{token}"
         subject = f"Tenant Referencing Invitation for {room.name}"
@@ -824,17 +824,15 @@ class ReferencingApplicationListCreateView(APIView):
             f"{invite_link}\n\n"
             f"Thank you,\nNeoScape Properties Management"
         )
-        try:
-            send_mail(
-                subject,
-                body,
-                settings.DEFAULT_FROM_EMAIL or 'noreply@neoscapeproperties.com',
-                [applicant_email],
-                fail_silently=True
-            )
-        except Exception as e:
-            # log or handle email error silently
-            pass
+        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@neoscapeproperties.com'
+
+        def _send_email():
+            try:
+                send_mail(subject, body, from_email, [applicant_email], fail_silently=True)
+            except Exception:
+                pass
+
+        threading.Thread(target=_send_email, daemon=True).start()
 
         return Response({
             'success': True,
