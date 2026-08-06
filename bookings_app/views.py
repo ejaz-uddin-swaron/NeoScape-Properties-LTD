@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rooms.permissions import IsAdmin, IsTenant, IsAdminOrTenant
 from rooms.models import Room
 from .models import Booking, TenantAssignment, ChatChannel, ChatMessage, TenancyAgreement
@@ -272,6 +273,56 @@ class MyAssignmentView(APIView):
 # ─── Tenant Rent Views ────────────────────────────────────────────────────────
 
 
+def _auto_generate_payments(schedule):
+    """
+    Auto-generate pending RentPayment records for each month
+    from the schedule's start_date up to the current month.
+    Skips months that already have a payment record.
+    Marks past-due payments as 'overdue'.
+    """
+    from .models import RentPayment
+    from datetime import date
+    import calendar
+
+    today = timezone.now().date()
+    start = schedule.start_date
+
+    # Don't generate for non-active schedules
+    if schedule.status != 'active':
+        return
+
+    # Walk month-by-month from start_date to the current month
+    year, month = start.year, start.month
+    while date(year, month, 1) <= today.replace(day=1):
+        # Clamp due_day to the last day of the month
+        last_day = calendar.monthrange(year, month)[1]
+        due_day = min(schedule.due_day, last_day)
+        due_date = date(year, month, due_day)
+
+        # Only generate if no payment exists for this month yet
+        exists = RentPayment.objects.filter(
+            schedule=schedule,
+            due_date__year=year,
+            due_date__month=month
+        ).exists()
+
+        if not exists:
+            payment_status = 'overdue' if due_date < today else 'pending'
+            RentPayment.objects.create(
+                schedule=schedule,
+                due_date=due_date,
+                amount=schedule.monthly_rent,
+                status=payment_status,
+            )
+
+        # Advance to next month
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+
+
 class MyRentSchedulesView(APIView):
     """Tenant: view own rent schedules."""
     permission_classes = [IsAdminOrTenant]
@@ -288,6 +339,13 @@ class MyRentSchedulesView(APIView):
             schedules = RentSchedule.objects.filter(
                 tenant_email=request.user.email
             ).prefetch_related('payment_history')
+
+        # Auto-generate any missing monthly payment records
+        for schedule in schedules:
+            _auto_generate_payments(schedule)
+
+        # Re-fetch with fresh payment_history after generation
+        schedules = schedules.all()
 
         serializer = serializers.RentScheduleSerializer(schedules, many=True)
         return Response({'success': True, 'data': serializer.data})
@@ -756,7 +814,8 @@ class ReferencingApplicationListCreateView(APIView):
 
         # Send invite email
         # Public invitation link
-        invite_link = f"http://localhost:5173/referencing/{token}"
+        frontend_base = getattr(settings, 'FRONTEND_URL', 'https://neoscapeproperties.co.uk').rstrip('/')
+        invite_link = f"{frontend_base}/referencing/{token}"
         subject = f"Tenant Referencing Invitation for {room.name}"
         body = (
             f"Dear {applicant_name},\n\n"
@@ -814,15 +873,19 @@ class ReferencingApplicationDetailView(APIView):
                 from django.contrib.auth.models import User
                 from .models import TenantAssignment
                 
-                user, created = User.objects.get_or_create(
-                    email=app.applicant_email,
-                    defaults={
-                        'username': app.applicant_email.split('@')[0] + secrets.token_hex(3),
-                        'first_name': app.applicant_name.split(' ')[0],
-                        'last_name': ' '.join(app.applicant_name.split(' ')[1:]) if ' ' in app.applicant_name else ''
-                    }
-                )
-                if created:
+                user = User.objects.filter(email=app.applicant_email).first()
+                if not user:
+                    username = app.applicant_email.split('@')[0] + secrets.token_hex(3)
+                    # Ensure username is unique
+                    while User.objects.filter(username=username).exists():
+                        username = app.applicant_email.split('@')[0] + secrets.token_hex(3)
+                    
+                    user = User.objects.create(
+                        email=app.applicant_email,
+                        username=username,
+                        first_name=app.applicant_name.split(' ')[0],
+                        last_name=' '.join(app.applicant_name.split(' ')[1:]) if ' ' in app.applicant_name else ''
+                    )
                     user.set_unusable_password()
                     user.save()
                 
@@ -834,13 +897,14 @@ class ReferencingApplicationDetailView(APIView):
                 ).exists()
                 
                 if not assignment_exists:
+                    from decimal import Decimal
                     TenantAssignment.objects.create(
                         tenant=user,
                         room=app.property_room,
                         property_name=app.property_room.location,
                         start_date=timezone.now().date(),
                         monthly_rent=app.property_room.price,
-                        deposit=app.property_room.price * 1.5,
+                        deposit=app.property_room.price * Decimal('1.5'),
                         status='pending',
                         notes=f"Created automatically from approved referencing application #{app.id}."
                     )
@@ -862,6 +926,7 @@ class ReferencingApplicationDetailView(APIView):
 
 class PublicReferencingDetailView(APIView):
     permission_classes = [] # Public view
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def get(self, request, token):
         try:
@@ -899,6 +964,7 @@ class PublicReferencingDetailView(APIView):
 
 class ReferencingDocumentUploadView(APIView):
     permission_classes = [] # Allow public application upload
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def post(self, request):
         uploaded_file = request.FILES.get('file')
@@ -953,6 +1019,7 @@ class ReferencingDocumentUploadView(APIView):
 class GenerateReferencingReportView(APIView):
     """Landlord-only: Generate a PDF referencing report for a given application."""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
 
     def post(self, request, pk):
         try:
@@ -1128,7 +1195,7 @@ class StripeWebhookView(APIView):
         # Handle checkout.session.completed
         if event and event.type == 'checkout.session.completed':
             session = event.data.object
-            payment_id = session.get('client_reference_id') or (session.get('metadata') or {}).get('payment_id')
+            payment_id = getattr(session, 'client_reference_id', None) or (getattr(session, 'metadata', {}) or {}).get('payment_id')
 
             if payment_id:
                 try:
@@ -1137,7 +1204,7 @@ class StripeWebhookView(APIView):
                     payment.paid_amount = payment.amount
                     payment.paid_date = timezone.now().date()
                     payment.payment_method = 'stripe'
-                    payment.stripe_payment_intent_id = session.get('payment_intent', '')
+                    payment.stripe_payment_intent_id = str(getattr(session, 'payment_intent', '') or '')
                     payment.save(update_fields=[
                         'status', 'paid_amount', 'paid_date',
                         'payment_method', 'stripe_payment_intent_id'
@@ -1158,10 +1225,17 @@ class StripePaymentSuccessView(APIView):
 
     def get(self, request):
         import stripe
+        import logging
+        logger = logging.getLogger(__name__)
         from django.conf import settings
         from .models import RentPayment
 
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe_key = getattr(settings, 'STRIPE_SECRET_KEY', '')
+        if not stripe_key:
+            logger.error("[StripePaymentSuccessView] STRIPE_SECRET_KEY is missing from settings.")
+            return Response({'success': False, 'error': 'Stripe secret key is missing from backend configuration.'}, status=500)
+
+        stripe.api_key = stripe_key
         session_id = request.query_params.get('session_id')
 
         if not session_id:
@@ -1170,30 +1244,35 @@ class StripePaymentSuccessView(APIView):
         try:
             session = stripe.checkout.Session.retrieve(session_id)
         except Exception as e:
-            return Response({'success': False, 'error': str(e)}, status=400)
+            logger.error(f"[StripePaymentSuccessView] Stripe session.retrieve failed: {str(e)}")
+            return Response({'success': False, 'error': f'Stripe retrieve error: {str(e)}'}, status=400)
 
         if session.payment_status != 'paid':
-            return Response({'success': False, 'error': 'Payment not completed yet', 'payment_status': session.payment_status}, status=402)
+            logger.warning(f"[StripePaymentSuccessView] Session {session_id} payment status is '{session.payment_status}' instead of 'paid'")
+            return Response({'success': False, 'error': f'Payment status is {session.payment_status}', 'payment_status': session.payment_status}, status=402)
 
         payment_id = session.client_reference_id or (session.metadata or {}).get('payment_id')
         if not payment_id:
-            return Response({'success': False, 'error': 'Could not identify payment'}, status=400)
+            logger.error(f"[StripePaymentSuccessView] Session {session_id} has no client_reference_id or payment_id in metadata")
+            return Response({'success': False, 'error': 'Could not identify payment record from session'}, status=400)
 
         try:
             payment = RentPayment.objects.get(pk=int(payment_id))
         except RentPayment.DoesNotExist:
-            return Response({'success': False, 'error': 'Payment record not found'}, status=404)
+            logger.error(f"[StripePaymentSuccessView] RentPayment #{payment_id} not found")
+            return Response({'success': False, 'error': f'Payment #{payment_id} record not found'}, status=404)
 
         if payment.status != 'paid':
             payment.status = 'paid'
             payment.paid_amount = payment.amount
             payment.paid_date = timezone.now().date()
             payment.payment_method = 'stripe'
-            payment.stripe_payment_intent_id = session.get('payment_intent', '')
+            payment.stripe_payment_intent_id = getattr(session, 'payment_intent', '') or ''
             payment.save(update_fields=[
                 'status', 'paid_amount', 'paid_date',
                 'payment_method', 'stripe_payment_intent_id'
             ])
+            logger.info(f"[StripePaymentSuccessView] Marked RentPayment #{payment.id} as PAID via Stripe session {session_id}")
 
         return Response({
             'success': True,

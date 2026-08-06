@@ -86,6 +86,9 @@ class SupabaseStorage:
         if file_size > max_size:
             raise Exception(f"File too large. Max size: {max_size} bytes")
 
+        # Validate file content / magic bytes
+        self._validate_file_magic_bytes(file_content, file_ext, is_document=False)
+
         file_name = f"{uuid.uuid4().hex}{file_ext}"
         file_path = f"{folder}/{file_name}" if folder else file_name
 
@@ -117,6 +120,9 @@ class SupabaseStorage:
         if file_size > max_size:
             raise Exception(f"File too large. Max size: {max_size} bytes")
 
+        # Validate file content / magic bytes
+        self._validate_file_magic_bytes(file_content, file_ext, is_document=True)
+
         file_name = f"{uuid.uuid4().hex}{file_ext}"
         file_path = f"{folder}/{file_name}" if folder else file_name
 
@@ -127,6 +133,34 @@ class SupabaseStorage:
         except Exception as e:
             logger.exception("Document upload failed for %s", file.name)
             raise Exception(f"Document upload failed: {e}")
+
+    def _validate_file_magic_bytes(self, content: bytes, ext: str, is_document: bool = False) -> None:
+        """Validate content signature / magic bytes to block disguised malicious files."""
+        if not content:
+            raise Exception("Uploaded file is empty.")
+
+        # Check for known executable signatures
+        if content.startswith(b'MZ') or content.startswith(b'\x7fELF') or content.startswith(b'!\x19\x01\x00'):
+            raise Exception("Security violation: Executable or binary payload detected.")
+
+        if ext in {'.jpg', '.jpeg'}:
+            if not content.startswith(b'\xff\xd8\xff'):
+                raise Exception("Invalid JPEG file signature.")
+        elif ext == '.png':
+            if not content.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise Exception("Invalid PNG file signature.")
+        elif ext == '.gif':
+            if not (content.startswith(b'GIF87a') or content.startswith(b'GIF89a')):
+                raise Exception("Invalid GIF file signature.")
+        elif ext == '.webp':
+            if not (content[:4] == b'RIFF' and content[8:12] == b'WEBP'):
+                raise Exception("Invalid WebP file signature.")
+        elif ext == '.pdf':
+            if not content.startswith(b'%PDF'):
+                raise Exception("Invalid PDF file signature.")
+        elif ext in {'.docx', '.xlsx'}:
+            if not content.startswith(b'PK\x03\x04'):
+                raise Exception(f"Invalid Office OpenXML ({ext}) file signature.")
 
     def delete_image(self, file_path: str, bucket_name: str = 'images') -> bool:
         if not self.client:

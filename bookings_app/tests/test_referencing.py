@@ -1,10 +1,10 @@
+from datetime import timedelta
 from django.test import TestCase
 from django.utils import timezone
 from django.contrib.auth.models import User
-from dateutil.relativedelta import relativedelta
 from rooms.models import Room
 from bookings_app.models import ReferencingApplication
-from bookings_app.management.commands.purge_referencing_data import Command as PurgeCommand
+
 
 class TenantReferencingTests(TestCase):
     def setUp(self):
@@ -38,6 +38,8 @@ class TenantReferencingTests(TestCase):
 
     def test_gdpr_purge_logic(self):
         """Verify that eligible data is deleted and active/recent disputes are retained."""
+        from bookings_app.management.commands.purge_referencing_data import Command as PurgeCommand
+
         now = timezone.now()
         
         # App 1: Tenancy ended 13 months ago (Eligible for deletion)
@@ -47,7 +49,7 @@ class TenantReferencingTests(TestCase):
             landlord_user=self.landlord,
             applicant_name='Old Tenant',
             applicant_email='old@example.com',
-            tenancy_end_date=(now - relativedelta(months=13)).date(),
+            tenancy_end_date=(now - timedelta(days=395)).date(),
             legal_dispute_active=False
         )
 
@@ -58,7 +60,7 @@ class TenantReferencingTests(TestCase):
             landlord_user=self.landlord,
             applicant_name='Recent Tenant',
             applicant_email='recent@example.com',
-            tenancy_end_date=(now - relativedelta(months=3)).date(),
+            tenancy_end_date=(now - timedelta(days=90)).date(),
             legal_dispute_active=False
         )
 
@@ -69,7 +71,7 @@ class TenantReferencingTests(TestCase):
             landlord_user=self.landlord,
             applicant_name='Dispute Tenant',
             applicant_email='dispute@example.com',
-            tenancy_end_date=(now - relativedelta(months=13)).date(),
+            tenancy_end_date=(now - timedelta(days=395)).date(),
             legal_dispute_active=True
         )
 
@@ -81,7 +83,7 @@ class TenantReferencingTests(TestCase):
             applicant_name='Resolved Tenant',
             applicant_email='resolved@example.com',
             legal_dispute_active=False,
-            resolved_at=now - relativedelta(months=7)
+            resolved_at=now - timedelta(days=210)
         )
 
         # App 5: Legal dispute resolved 2 months ago (Should NOT be deleted)
@@ -92,7 +94,7 @@ class TenantReferencingTests(TestCase):
             applicant_name='Resolved Recent Tenant',
             applicant_email='resolved_recent@example.com',
             legal_dispute_active=False,
-            resolved_at=now - relativedelta(months=2)
+            resolved_at=now - timedelta(days=60)
         )
 
         # Run purge command

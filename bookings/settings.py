@@ -82,6 +82,10 @@ REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '30/minute',
+        'user': '100/minute',
+    },
 }
 
 # Swagger Settings - Supabase access token (Bearer)
@@ -275,6 +279,9 @@ FERNET_SECRET_KEY = os.environ.get("FERNET_SECRET_KEY")
 # Media / Uploads
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Frontend URL Config
+FRONTEND_URL = env("FRONTEND_URL", default="https://neoscapeproperties.co.uk")
 
 # Stripe Config
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")

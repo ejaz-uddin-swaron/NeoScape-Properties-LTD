@@ -1,9 +1,13 @@
+import json
+import re
 import requests
+from io import BytesIO
+from django.conf import settings
+from openai import OpenAI
 # pyrefly: ignore [missing-import]
 import fitz  # PyMuPDF
 # pyrefly: ignore [missing-import]
 import docx
-from io import BytesIO
 
 def extract_pdf_text(file_bytes):
     """Extract raw text from PDF bytes using PyMuPDF (fitz)."""
@@ -62,11 +66,6 @@ def extract_text_from_url(file_url, file_name=None):
         return f"[Unsupported file extension for extraction: {ext}]"
 
 
-import json
-import re
-from openai import OpenAI
-from django.conf import settings
-
 
 def _normalize_ocr_text(text: str) -> str:
     """Pre-process extracted text to clean up common OCR artifacts."""
@@ -76,7 +75,8 @@ def _normalize_ocr_text(text: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text)
     # Fix common OCR character substitutions
     text = text.replace('|', 'l')  # pipe → lowercase L
-    text = text.replace('0', 'O').replace('O', '0')  # Only in numeric contexts — skip global
+    # Scope 'O' to '0' replacement specifically to digit/numeric contexts (e.g., between digits or digit/boundary)
+    text = re.sub(r'(?<=\d)[oO](?=\d)|(?<=\d)[oO]\b|\b[oO](?=\d)', '0', text)
     # Remove non-printable characters
     text = re.sub(r'[^\x20-\x7E\n£€$%]', '', text)
     # Normalize currency symbols
