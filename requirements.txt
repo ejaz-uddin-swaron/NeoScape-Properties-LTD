@@ -1,6 +1,6 @@
 # Core Django
-Django>=5.0
-djangorestframework>=3.14
+Django>=5.0,<5.2
+djangorestframework>=3.15.2
 django-cors-headers>=4.0
 django-environ>=0.11
 django-extensions>=3.2
@@ -15,7 +15,7 @@ psycopg2-binary>=2.9
 Pillow>=10.0
 
 # API Documentation
-drf-yasg>=1.20
+drf-yasg>=1.21.7
 
 # Supabase Integration
 supabase>=2.0
