@@ -814,7 +814,8 @@ class ReferencingApplicationListCreateView(APIView):
 
         # Send invite email
         # Public invitation link
-        invite_link = f"http://localhost:5173/referencing/{token}"
+        frontend_base = getattr(settings, 'FRONTEND_URL', 'https://neoscapeproperties.co.uk').rstrip('/')
+        invite_link = f"{frontend_base}/referencing/{token}"
         subject = f"Tenant Referencing Invitation for {room.name}"
         body = (
             f"Dear {applicant_name},\n\n"

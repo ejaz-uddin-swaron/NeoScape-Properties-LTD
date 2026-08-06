@@ -280,6 +280,9 @@ FERNET_SECRET_KEY = os.environ.get("FERNET_SECRET_KEY")
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Frontend URL Config
+FRONTEND_URL = env("FRONTEND_URL", default="https://neoscapeproperties.co.uk")
+
 # Stripe Config
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
