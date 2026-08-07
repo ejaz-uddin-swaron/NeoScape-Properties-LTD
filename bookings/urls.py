@@ -33,7 +33,7 @@ schema_view = get_schema_view(
     ),
     public=True,
     permission_classes=(permissions.AllowAny,),
-    url='https://room-booking-pjo6.onrender.com/' if not settings.DEBUG else None,
+    url='https://neo-scape-properties-ltd-nine.vercel.app/' if not settings.DEBUG else None,
 )
 
 

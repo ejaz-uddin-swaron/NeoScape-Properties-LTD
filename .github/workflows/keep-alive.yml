@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Ping backend health endpoint
         env:
-          URL: ${{ secrets.KEEP_ALIVE_URL || 'https://room-booking-pjo6.onrender.com/health/' }}
+          URL: ${{ secrets.KEEP_ALIVE_URL || 'https://neo-scape-properties-ltd-nine.vercel.app/health/' }}
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 60 --max-time 120 --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors "$URL" || echo "000")
           if [ "$STATUS" = "200" ]; then
