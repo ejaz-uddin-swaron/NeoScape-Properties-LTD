@@ -46,7 +46,7 @@ SECRET_KEY = env('SECRET_KEY')  # Required - must be set in .env
 DEBUG = env('DEBUG')
 
 # Allow Render hosts
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '.onrender.com'])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '.onrender.com', 'neo-scape-properties-ltd-nine.vercel.app'])
 
 # Application definition
 
